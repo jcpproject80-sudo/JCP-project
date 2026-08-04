@@ -1,12 +1,21 @@
 import { Hono } from 'hono';
 import { getSupabaseClient } from '../db/supabase';
+import { requireAuth } from '../middleware/auth';
 
 type Bindings = {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
 };
 
-const auth = new Hono<{ Bindings: Bindings }>();
+type Variables = {
+  user: {
+    id: string;
+    email: string | undefined;
+    role: string;
+  };
+};
+
+const auth = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // POST /auth/signup
 auth.post('/signup', async (c) => {
@@ -22,7 +31,7 @@ auth.post('/signup', async (c) => {
     email,
     password,
     options: {
-      data: { username }, // this gets picked up by your handle_new_user() trigger
+      data: { username },
     },
   });
 
@@ -60,30 +69,18 @@ auth.post('/login', async (c) => {
   });
 });
 
-// GET /auth/me  (temporary version — no middleware yet, expects token in header manually)
-auth.get('/me', async (c) => {
-  const authHeader = c.req.header('Authorization');
-  const token = authHeader?.replace('Bearer ', '');
-
-  if (!token) {
-    return c.json({ success: false, message: 'No token provided' }, 401);
-  }
-
+// GET /auth/me — now protected by middleware instead of manual checks
+auth.get('/me', requireAuth, async (c) => {
+  const authUser = c.get('user'); // set by requireAuth middleware
   const supabase = getSupabaseClient(c.env);
-  const { data, error } = await supabase.auth.getUser(token);
 
-  if (error || !data.user) {
-    return c.json({ success: false, message: 'Invalid or expired token' }, 401);
-  }
-
-  // Fetch their profile too
   const { data: profile } = await supabase
     .from('profiles')
     .select('*')
-    .eq('id', data.user.id)
+    .eq('id', authUser.id)
     .single();
 
-  return c.json({ success: true, data: { user: data.user, profile } });
+  return c.json({ success: true, data: { user: authUser, profile } });
 });
 
 export default auth;
